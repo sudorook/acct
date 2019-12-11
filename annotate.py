@@ -91,7 +91,7 @@ def identify_database(record):
 
 
 def read_species_map(path):
-    """ Return jgi species map """
+    """ Return JGI species map. """
     species_map = {}
     with open(path) as handle:
         csv_reader = csv.reader(handle, delimiter=",")
@@ -101,12 +101,90 @@ def read_species_map(path):
     return species_map
 
 
+def annotate_pfam(record, dbdir):
+    """ Annotate header with the pfam accessio number. """
+    pfamseq_acc = record.id
+    domain_number = re.findall(
+        r"domain.*\[*(\d)\]*$", record.description
+    )[0]
+    res = query_database(
+        os.path.join(dbdir, PFAM),
+        "pfamseq",
+        ["description", "species", "taxonomy", "ncbi_taxid"],
+        {"pfamseq_acc": pfamseq_acc},
+    )
+    if res:
+        header = (
+            pfamseq_acc
+            + "|"
+            + res[0][0]
+            + "|"
+            + domain_number
+            + "|"
+            + str(res[0][3])
+            + "|"
+            + res[0][1]
+            + "|"
+            + str(res[0][2])
+        )
+    else:
+        print(record)
+        sys.exit("Pfam accession %s not found." % str(pfamseq_acc))
+    return header
+
+
+def annotate_ncbi(record, dbdir):
+    """ Annotate a header using its nucleotide refseq accesion number. """
+    accession_version = record.id.split("  ")[0]
+    description = "".join(record.description.split("  ")[1:])
+    domain_number = re.findall(
+        r"domain.*\[*(\d)\]*$", record.description
+    )[0]
+    res = query_database(
+        os.path.join(dbdir, ACCESSION2TAXID),
+        "nucl_gb",
+        ["taxid"],
+        {"accession.version": accession_version},
+    )
+    if res:
+        taxid = res[0][0]
+    else:
+        sys.exit(
+            "NCBI accession.version %s not found."
+            % str(accession_version)
+        )
+    res = query_database(
+        os.path.join(dbdir, TAXONOMY),
+        "taxonomy",
+        ["species", "lineage"],
+        {"taxid": taxid},
+    )
+    if res:
+        header = (
+            accession_version
+            + "|"
+            + description
+            + "|"
+            + domain_number
+            + "|"
+            + str(taxid)
+            + "|"
+            + res[0][0]
+            + "|"
+            + res[0][1]
+        )
+    else:
+        print(record)
+        sys.exit("NCBI taxid %s not found." % str(taxid))
+    return header
+
+
 def main():
     """ Main """
     options = parse_options()
     if not options.dbdir:
         try:
-            os.environ(["SQLITEDB"])
+            options.dbdir = os.environ(["SQLITEDB"])
         except KeyError as error:
             sys.exit("No database directory provided. Exiting.")
 
@@ -119,80 +197,15 @@ def main():
     for record in records:
         record_db = identify_database(record)
         if record_db == "pfam":
-            pfamseq_acc = record.id
-            domain_number = re.findall(
-                r"domain.*\[*(\d)\]*$", record.description
-            )[0]
-            res = query_database(
-                os.path.join(options.dbdir, PFAM),
-                "pfamseq",
-                ["description", "species", "taxonomy"],
-                {"pfamseq_acc": pfamseq_acc},
-            )
-            if res:
-                header = (
-                    pfamseq_acc
-                    + "|"
-                    + res[0][0]
-                    + "|"
-                    + domain_number
-                    + "|"
-                    + str(taxid)
-                    + "|"
-                    + res[0][1]
-                    + "|"
-                    + res[0][2]
-                )
-                record.id = "pfam|" + header
-                record.description = ""
-                record.name = ""
-            else:
-                sys.exit("Pfam accession %s not found." % str(pfamseq_acc))
+            header = annotate_pfam(record, options.dbdir)
+            record.id = "pfam|" + header
+            record.name = record.id
+            record.description = ""
         elif record_db == "ncbi":
-            accession_version = record.id.split("  ")[0]
-            description = "".join(record.description.split("  ")[1:])
-            domain_number = re.findall(
-                r"domain.*\[*(\d)\]*$", record.description
-            )[0]
-            res = query_database(
-                os.path.join(options.dbdir, ACCESSION2TAXID),
-                "nucl_gb",
-                ["taxid"],
-                {"accession.version": accession_version},
-            )
-            if res:
-                taxid = res[0][0]
-            else:
-                sys.exit(
-                    "NCBI accession.version %s not found."
-                    % str(accession_version)
-                )
-            res = query_database(
-                os.path.join(options.dbdir, TAXONOMY),
-                "taxonomy",
-                ["species", "lineage"],
-                {"taxid": taxid},
-            )
-            if res:
-                header = (
-                    accession_version
-                    + "|"
-                    + description
-                    + "|"
-                    + domain_number
-                    + "|"
-                    + str(taxid)
-                    + "|"
-                    + res[0][0]
-                    + "|"
-                    + res[0][1]
-                )
-                record.id = "ncbi|" + header
-                record.description = ""
-                record.name = ""
-            else:
-                print(record)
-                sys.exit("NCBI taxid %s not found." % str(taxid))
+            header = annotate_ncbi(record, options.dbdir)
+            record.id = "ncbi|" + header
+            record.name = record.id
+            record.description = ""
         elif record_db == "jgi":
             fields = record.description.split("|")
             species_id = fields[1]
@@ -205,7 +218,7 @@ def main():
                 domain_number = re.findall(r"domain.*\[*(\d)\]*$", protein_id)[
                     0
                 ]
-            elif len(fields) == 5:
+            elif len(fields) == 5:  # hard-code workaround for now...
                 domain_number = re.findall(r"domain.*\[*(\d)\]*$", fields[4])[
                     0
                 ]
