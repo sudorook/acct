@@ -114,22 +114,35 @@ def annotate_pfam(record, dbdir):
         {"pfamseq_acc": pfamseq_acc},
     )
     if res:
-        header = (
-            pfamseq_acc
-            + "|"
-            + res[0][0]
-            + "|"
-            + domain_number
-            + "|"
-            + str(res[0][3])
-            + "|"
-            + res[0][1]
-            + "|"
-            + str(res[0][2])
-        )
+        taxid = str(res[0][3])
+        description = res[0][0]
     else:
         print(record)
         sys.exit("Pfam accession %s not found." % str(pfamseq_acc))
+
+    res = query_database(
+        os.path.join(dbdir, TAXONOMY),
+        "taxonomy",
+        ["species", "lineage"],
+        {"taxid": taxid},
+    )
+    if res:
+        header = (
+            pfamseq_acc
+            + "||"
+            + description
+            + "||"
+            + domain_number
+            + "||"
+            + taxid
+            + "||"
+            + res[0][0]
+            + "||"
+            + res[0][1]
+        )
+    else:
+        print(record)
+        sys.exit("NCBI taxid %s not found." % str(taxid))
     return header
 
 
@@ -147,7 +160,7 @@ def annotate_ncbi(record, dbdir):
         {"accession.version": accession_version},
     )
     if res:
-        taxid = res[0][0]
+        taxid = str(res[0][0])
     else:
         sys.exit(
             "NCBI accession.version %s not found."
@@ -162,15 +175,15 @@ def annotate_ncbi(record, dbdir):
     if res:
         header = (
             accession_version
-            + "|"
+            + "||"
             + description
-            + "|"
+            + "||"
             + domain_number
-            + "|"
+            + "||"
             + str(taxid)
-            + "|"
+            + "||"
             + res[0][0]
-            + "|"
+            + "||"
             + res[0][1]
         )
     else:
@@ -185,10 +198,9 @@ def main():
     if not options.dbdir:
         try:
             options.dbdir = os.environ(["SQLITEDB"])
-        except KeyError as error:
+        except BaseException as error:
             sys.exit("No database directory provided. Exiting.")
 
-    good = []
     bad = []
 
     jgi2taxid = read_species_map("data/jgi_species_map.csv")
@@ -198,19 +210,17 @@ def main():
         record_db = identify_database(record)
         if record_db == "pfam":
             header = annotate_pfam(record, options.dbdir)
-            record.id = "pfam|" + header
+            record.id = "pfam||" + header
             record.name = record.id
             record.description = ""
         elif record_db == "ncbi":
             header = annotate_ncbi(record, options.dbdir)
-            record.id = "ncbi|" + header
+            record.id = "ncbi||" + header
             record.name = record.id
             record.description = ""
         elif record_db == "jgi":
             fields = record.description.split("|")
             species_id = fields[1]
-            if species_id == "Neute_mat_a1":  # hard code this for now...
-                continue
             transcript_id = fields[2]
             taxid = jgi2taxid[species_id]
             protein_id = fields[3]
@@ -226,17 +236,20 @@ def main():
                 options.dbdir, "jgi/" + species_id + "_kog.db"
             )
 
-            res = query_database(
-                species_db,
-                species_id,
-                ["kogdefline"],
-                {"transcriptID": transcript_id},
-            )
+            if not species_id == "Neute_mat_a1":  # hard code this for now...
+                res = query_database(
+                    species_db,
+                    species_id,
+                    ["kogdefline"],
+                    {"transcriptID": transcript_id},
+                )
+            else:
+                res = None
             if res:
-                protein_description = res[0][0] + "|" + domain_number
+                protein_description = res[0][0] + "||" + domain_number
             else:
                 protein_description = (
-                    re.split(r"_*domain", protein_id)[0] + "|" + domain_number
+                    re.split(r"_*domain", protein_id)[0] + "||" + domain_number
                 )
                 bad.append(record)
 
@@ -248,15 +261,15 @@ def main():
             )
             if res:
                 header = (
-                    "jgi|"
+                    "jgi||"
                     + transcript_id
-                    + "|"
+                    + "||"
                     + protein_description
-                    + "|"
+                    + "||"
                     + str(taxid)
-                    + "|"
+                    + "||"
                     + res[0][0]
-                    + "|"
+                    + "||"
                     + res[0][1]
                 )
                 record.id = header
@@ -274,8 +287,9 @@ def main():
     with open(options.input + ".an", "w") as handle:
         SeqIO.write(records, handle, "fasta-2line")
 
-    with open("failure.fasta", "w") as handle:
-        SeqIO.write(bad, handle, "fasta-2line")
+    if bad:
+        with open("failure.fasta", "w") as handle:
+            SeqIO.write(bad, handle, "fasta-2line")
 
 
 if __name__ == "__main__":
